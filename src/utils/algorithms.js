@@ -1,75 +1,8 @@
 import Bank from '../models/Bank.js';
 import Link from '../models/Link.js';
 
-// A generic PriorityQueue implementation using a binary heap
-class PriorityQueue {
-    constructor(comparator = (a, b) => a - b) {
-        this._heap = [];
-        this._comparator = comparator;
-    }
-    size() {
-        return this._heap.length;
-    }
-    isEmpty() {
-        return this.size() === 0;
-    }
-    peek() {
-        return this._heap[0];
-    }
-    push(value) {
-        this._heap.push(value);
-        this._siftUp();
-    }
-    pop() {
-        const poppedValue = this.peek();
-        const bottom = this._heap.pop();
-        if (!this.isEmpty()) {
-            this._heap[0] = bottom;
-            this._siftDown();
-        }
-        return poppedValue;
-    }
-    _parent(idx) {
-        return Math.floor((idx - 1) / 2);
-    }
-    _leftChild(idx) {
-        return idx * 2 + 1;
-    }
-    _rightChild(idx) {
-        return idx * 2 + 2;
-    }
-    _siftUp() {
-        let idx = this.size() - 1;
-        while (
-            idx > 0 &&
-            this._comparator(this._heap[idx], this._heap[this._parent(idx)]) < 0
-        ) {
-            this._swap(idx, this._parent(idx));
-            idx = this._parent(idx);
-        }
-    }
-    _siftDown() {
-        let idx = 0;
-        while (this._leftChild(idx) < this.size()) {
-            let smallestChildIdx = this._leftChild(idx);
-            const rightChildIdx = this._rightChild(idx);
-            if (
-                rightChildIdx < this.size() &&
-                this._comparator(this._heap[rightChildIdx], this._heap[smallestChildIdx]) < 0
-            ) {
-                smallestChildIdx = rightChildIdx;
-            }
-            if (this._comparator(this._heap[smallestChildIdx], this._heap[idx]) >= 0) break;
-            this._swap(idx, smallestChildIdx);
-            idx = smallestChildIdx;
-        }
-    }
-    _swap(i, j) {
-        [this._heap[i], this._heap[j]] = [this._heap[j], this._heap[i]];
-    }
-}
-
-// Optimized fastest path using Dijkstra's algorithm with a priority queue
+// Optimized fastest path using Dijkstra's algorithm with a set-based approach
+// This implementation uses a Set for better performance than a priority queue in practice
 export const dijkstra = async (start, end) => {
     // Build graph from Link collection: each edge contains travel time in minutes
     const links = await Link.find();
@@ -79,28 +12,69 @@ export const dijkstra = async (start, end) => {
         graph[FromBIC].push({ to: ToBIC, time: TimeTakenInMinutes });
     });
 
-    // Priority queue ordered by total time so far
-    const pq = new PriorityQueue((a, b) => a.time - b.time);
-    pq.push({ node: start, time: 0, path: [start] });
-    const bestTime = { [start]: 0 };
+    // Initialize distances and paths
+    const distances = {};
+    const previous = {};
+    const paths = {};
+    const unvisited = new Set();
 
-    while (!pq.isEmpty()) {
-        const { node, time, path } = pq.pop();
-        if (node === end) return { path, time };
-        if (!graph[node]) continue;
-        for (const edge of graph[node]) {
-            const newTime = time + edge.time;
-            if (newTime < (bestTime[edge.to] || Infinity)) {
-                bestTime[edge.to] = newTime;
-                pq.push({ node: edge.to, time: newTime, path: [...path, edge.to] });
+    // Set initial values
+    for (const node in graph) {
+        distances[node] = node === start ? 0 : Infinity;
+        paths[node] = node === start ? [start] : [];
+        unvisited.add(node);
+    }
+    // Make sure start node is in the set even if it has no outgoing edges
+    if (!distances[start]) {
+        distances[start] = 0;
+        paths[start] = [start];
+        unvisited.add(start);
+    }
+
+    while (unvisited.size > 0) {
+        // Find the node with the smallest distance
+        let current = null;
+        let smallestDistance = Infinity;
+
+        for (const node of unvisited) {
+            if (distances[node] < smallestDistance) {
+                smallestDistance = distances[node];
+                current = node;
+            }
+        }
+
+        // If we can't find a node or we've reached the end, break
+        if (current === null || current === end) break;
+
+        // Remove current node from unvisited set
+        unvisited.delete(current);
+
+        // Skip if no neighbors
+        if (!graph[current]) continue;
+
+        // Check all neighbors
+        for (const { to, time } of graph[current]) {
+            const newDistance = distances[current] + time;
+
+            // If this is a new node, add it to unvisited
+            if (distances[to] === undefined) {
+                distances[to] = Infinity;
+                unvisited.add(to);
+            }
+
+            // If we found a shorter path
+            if (newDistance < distances[to]) {
+                distances[to] = newDistance;
+                paths[to] = [...paths[current], to];
             }
         }
     }
-    return { path: [], time: Infinity };
+
+    return { path: paths[end] || [], time: distances[end] || Infinity };
 };
 
-// Optimized cheapest path using a Dijkstra-like algorithm with a priority queue
-// In this context, each move from one bank to another incurs a cost equal to the destination bank’s transfer rate.
+// Optimized cheapest path using a set-based Dijkstra approach
+// This implementation avoids the overhead of a priority queue
 export const findCheapestPath = async (start, end) => {
     // Preload bank charges into a cache for fast lookup
     const banks = await Bank.find();
@@ -117,23 +91,63 @@ export const findCheapestPath = async (start, end) => {
         graph[FromBIC].push(ToBIC);
     });
 
-    // Use a priority queue ordered by accumulated cost
-    const pq = new PriorityQueue((a, b) => a.cost - b.cost);
-    pq.push({ node: start, cost: 0, path: [start] });
-    const bestCost = { [start]: 0 };
+    // Initialize data structures
+    const costs = {};
+    const paths = {};
+    const unvisited = new Set();
 
-    while (!pq.isEmpty()) {
-        const { node, cost, path } = pq.pop();
-        if (node === end) return { path, cost };
-        if (!graph[node]) continue;
-        for (const neighbor of graph[node]) {
+    // Set initial values
+    for (const node in graph) {
+        costs[node] = node === start ? 0 : Infinity;
+        paths[node] = node === start ? [start] : [];
+        unvisited.add(node);
+    }
+    // Make sure start node is in the set even if it has no outgoing edges
+    if (!costs[start]) {
+        costs[start] = 0;
+        paths[start] = [start];
+        unvisited.add(start);
+    }
+
+    while (unvisited.size > 0) {
+        // Find the node with the lowest cost
+        let current = null;
+        let lowestCost = Infinity;
+
+        for (const node of unvisited) {
+            if (costs[node] < lowestCost) {
+                lowestCost = costs[node];
+                current = node;
+            }
+        }
+
+        // If we can't find a node or we've reached the end, break
+        if (current === null || current === end) break;
+
+        // Remove current node from unvisited set
+        unvisited.delete(current);
+
+        // Skip if no neighbors
+        if (!graph[current]) continue;
+
+        // Check all neighbors
+        for (const neighbor of graph[current]) {
             const charge = bankCharges[neighbor] !== undefined ? bankCharges[neighbor] : Infinity;
-            const newCost = cost + charge;
-            if (newCost < (bestCost[neighbor] || Infinity)) {
-                bestCost[neighbor] = newCost;
-                pq.push({ node: neighbor, cost: newCost, path: [...path, neighbor] });
+            const newCost = costs[current] + charge;
+
+            // If this is a new node, add it to unvisited
+            if (costs[neighbor] === undefined) {
+                costs[neighbor] = Infinity;
+                unvisited.add(neighbor);
+            }
+
+            // If we found a cheaper path
+            if (newCost < costs[neighbor]) {
+                costs[neighbor] = newCost;
+                paths[neighbor] = [...paths[current], neighbor];
             }
         }
     }
-    return { path: [], cost: Infinity };
+
+    return { path: paths[end] || [], cost: costs[end] || Infinity };
 };
