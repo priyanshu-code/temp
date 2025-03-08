@@ -1,0 +1,16 @@
+node_modules/
+npm-debug.log
+.env
+.DS_Store
+coverage/
+dist/
+build/
+*.log
+*.lock
+*.tgz
+*.gz
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.swp
